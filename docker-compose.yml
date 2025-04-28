@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  go-highload-balancer:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - CONFIG_PATH=/app/configs/config.yaml
+    volumes:
+      - ./configs:/app/configs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend1:
+        condition: service_started
+      backend2:
+        condition: service_started
+      backend3:
+        condition: service_started
+    networks:
+      - loadbalancer-network
+
+  postgres:
+    image: postgres:14
+    environment:
+      POSTGRES_USER: balancer
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: rate_limiter
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - loadbalancer-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U balancer -d rate_limiter"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend1:
+    image: hashicorp/http-echo
+    command: ["-text", "Backend 1", "-listen", ":8080"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - loadbalancer-network
+
+  backend2:
+    image: hashicorp/http-echo
+    command: ["-text", "Backend 2", "-listen", ":8080"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - loadbalancer-network
+
+  backend3:
+    image: hashicorp/http-echo
+    command: ["-text", "Backend 3", "-listen", ":8080"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - loadbalancer-network
+
+volumes:
+  postgres-data:
+
+networks:
+  loadbalancer-network:
+    driver: bridge

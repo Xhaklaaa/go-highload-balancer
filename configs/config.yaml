@@ -1,0 +1,25 @@
+port: 8080
+backends:
+  - http://backend1:8080
+  - http://backend2:8080
+  - http://backend3:8080
+
+rate_limiting:
+  default:
+    capacity: 100
+    rate: 10
+  postgres:
+    host: localhost
+    port: 5432
+    user: postgres
+    password: secret
+    dbname: rate_limiter
+    sslmode: disable
+
+health_check:
+  interval: 30s
+  timeout: 5s
+  path: /health
+
+balancing:
+  algorithm: round_robin
