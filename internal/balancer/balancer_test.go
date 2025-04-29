@@ -4,18 +4,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/http/httputil"
-	"net/url"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/xhaklaaa/go-highload-balancer/internal/balancer/algorithms"
-	"github.com/xhaklaaa/go-highload-balancer/internal/core"
+	"github.com/xhaklaaa/go-highload-balancer/internal/proxy"
 	"gopkg.in/go-playground/assert.v1"
 )
 
-// MockLogger реализует интерфейс Logger для тестов
 type MockLogger struct {
 	mu   sync.Mutex
 	logs []string
@@ -33,6 +30,18 @@ func (m *MockLogger) Warnf(format string, args ...interface{}) {
 	m.logs = append(m.logs, "[WARN] "+fmt.Sprintf(format, args...))
 }
 
+func (m *MockLogger) Errorf(format string, args ...interface{}) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logs = append(m.logs, "[ERROR] "+fmt.Sprintf(format, args...))
+}
+
+func (m *MockLogger) Fatalf(format string, args ...interface{}) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logs = append(m.logs, "[FATAL] "+fmt.Sprintf(format, args...))
+}
+
 // Тест RoundRobin алгоритма
 func TestRoundRobinBalancer_NextBackend(t *testing.T) {
 	tests := []struct {
@@ -45,7 +54,7 @@ func TestRoundRobinBalancer_NextBackend(t *testing.T) {
 			name:     "basic round robin cycle",
 			backends: []string{"http://backend1", "http://backend2", "http://backend3"},
 			setup: func(lb *algorithms.RoundRobinBalancer) {
-				atomic.StoreUint32(&lb.Current, 2) // Начинаем с последнего
+				atomic.StoreUint32(&lb.Current, 2)
 			},
 			expectedURLs: []string{
 				"http://backend1", // (2+1)%3=0
@@ -73,13 +82,11 @@ func TestRoundRobinBalancer_NextBackend(t *testing.T) {
 	}
 }
 
-// Тест недоступных бэкендов
 func TestRoundRobinBalancer_UnavailableBackends(t *testing.T) {
 	logger := &MockLogger{}
 	backends := []string{"http://backend1", "http://backend2"}
 	lb := algorithms.NewRoundRobinBalancer(backends, logger)
 
-	// Помечаем все бэкенды как недоступные
 	lb.MarkBackendStatus("http://backend1", false)
 	lb.MarkBackendStatus("http://backend2", false)
 
@@ -107,18 +114,11 @@ func TestRoundRobinConcurrent(t *testing.T) {
 
 // Тест ReverseProxy с недоступными бэкендами
 func TestBalancerWithUnhealthyBackend(t *testing.T) {
-	// Создаем тестовый бэкенд
-	backendURL, _ := url.Parse("http://invalid:8080")
-	pool := core.NewBackendPool([]*url.URL{backendURL})
 
-	// Инициализация балансировщика
 	strategy := algorithms.NewRoundRobinBalancer([]string{"http://invalid:8080"}, &MockLogger{})
 
-	// Создаем прокси
-	proxy := httputil.NewSingleHostReverseProxy(backendURL)
-	handler := NewProxyHandler(strategy, &MockLogger{})
+	handler := proxy.NewProxyHandler(strategy, &MockLogger{})
 
-	// Тестовый запрос
 	req := httptest.NewRequest("GET", "/", nil)
 	rr := httptest.NewRecorder()
 
