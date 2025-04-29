@@ -3,7 +3,6 @@ package proxy
 import (
 	"bytes"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -18,7 +17,7 @@ type Handler struct {
 	logger   logger.Logger
 }
 
-func NewHandler(b interfaces.Balancer, logger *log.Logger) *Handler {
+func NewHandler(b interfaces.Balancer, logger interfaces.Logger) *Handler {
 	return &Handler{
 		balancer: b,
 		client: &http.Client{
@@ -32,7 +31,6 @@ func NewHandler(b interfaces.Balancer, logger *log.Logger) *Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Сохраняем тело запроса для повторного использования
 	var bodyBytes []byte
 	if r.Body != nil {
 		var buf bytes.Buffer
@@ -53,23 +51,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Собираем URL для бэкенда
 		targetURL := backendURL.ResolveReference(&url.URL{
 			Path:     r.URL.Path,
 			RawQuery: r.URL.RawQuery,
 		})
 
-		// Создаем новый запрос
 		req, err := http.NewRequest(r.Method, targetURL.String(), bytes.NewReader(bodyBytes))
 		if err != nil {
 			h.logger.Errorf("Error creating request to backend %s: %v", backendURL, err)
 			continue
 		}
 
-		// Копируем заголовки
 		req.Header = r.Header.Clone()
 
-		// Выполняем запрос
 		resp, err := h.client.Do(req)
 		if err != nil {
 			h.logger.Errorf("Error reaching backend %s: %v", backendURL, err)
@@ -78,14 +72,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		defer resp.Body.Close()
 
-		// Копируем заголовки ответа
 		for k, vs := range resp.Header {
 			for _, v := range vs {
 				w.Header().Add(k, v)
 			}
 		}
 
-		// Отправляем статус и тело ответа
 		w.WriteHeader(resp.StatusCode)
 		if _, err := io.Copy(w, resp.Body); err != nil {
 			h.logger.Errorf("Error copying response body: %v", err)

@@ -46,7 +46,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			body = io.TeeReader(r.Body, &bytes.Buffer{})
 		}
 
-		req, err := http.NewRequest(r.Method, backendURL+r.URL.Path, body)
+		req, err := http.NewRequest(r.Method, backendURL.String()+r.URL.Path, body)
 		if err != nil {
 			h.logger.Errorf("Error creating request", "backend", backendURL, "error", err)
 			continue
@@ -55,13 +55,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		copyHeaders(req.Header, r.Header)
 
 		if lc, ok := h.balancer.(interface{ ReleaseConnection(url string) }); ok {
-			defer lc.ReleaseConnection(backendURL)
+			defer lc.ReleaseConnection(backendURL.String())
 		}
 
 		resp, err := h.client.Do(req)
 		if err != nil {
 			h.logger.Errorf("Error reaching backend", "backend", backendURL, "error", err)
-			h.balancer.MarkBackendStatus(backendURL, false)
+			h.balancer.MarkBackendStatus(backendURL.String(), false)
 			continue
 		}
 		defer resp.Body.Close()

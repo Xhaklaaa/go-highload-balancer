@@ -9,19 +9,17 @@ rate_limiting:
     capacity: 100
     rate: 10
   postgres:
-    host: postgres
+    host: localhost
     port: 5432
-    user: balancer
-    password: secret
-    dbname: rate_limiter
+    user: user
+    password: password
+    dbname: dbname
     sslmode: disable
-  enabled: true
-  type: postgres
 
 health_check:
   interval: 30s
   timeout: 5s
-  path: /
+  path: /health
 
 balancing:
   algorithm: round_robin

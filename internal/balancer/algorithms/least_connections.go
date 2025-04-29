@@ -147,3 +147,12 @@ func (lc *LeastConnectionsBalancer) checkBackendHealth(backend *core.Backend) {
 
 	backend.SetHealthy(resp.StatusCode == http.StatusOK)
 }
+
+func (lc *LeastConnectionsBalancer) GetAll() []*core.Backend {
+	lc.mu.RLock()
+	defer lc.mu.RUnlock()
+
+	backends := make([]*core.Backend, 0, len(lc.backends))
+	backends = append(backends, lc.backends...)
+	return backends
+}

@@ -11,31 +11,32 @@ import (
 	"github.com/xhaklaaa/go-highload-balancer/internal/api/handler"
 	"github.com/xhaklaaa/go-highload-balancer/internal/balancer/interfaces"
 	"github.com/xhaklaaa/go-highload-balancer/internal/limiter"
-	"github.com/xhaklaaa/go-highload-balancer/internal/limiter/store"
 	"github.com/xhaklaaa/go-highload-balancer/internal/logger"
 )
 
 type Server struct {
-	router           *mux.Router
-	balancer         interfaces.Balancer
-	proxyHandler     http.Handler
-	port             int
-	logger           logger.Logger
-	rateLimiter      *limiter.TokenBucket
-	httpServer       *http.Server
-	rateLimiterStore limiter.ConfigStore
+	router              *mux.Router
+	balancer            interfaces.Balancer
+	proxyHandler        http.Handler
+	port                int
+	logger              logger.Logger
+	rateLimiter         *limiter.TokenBucket
+	httpServer          *http.Server
+	rateLimiterStore    limiter.ConfigStore
+	rateLimitingEnabled bool
 }
 
-func NewServer(lb interfaces.Balancer, proxyHandler http.Handler, port int, log logger.Logger, rateLimiter *limiter.TokenBucket, store limiter.ConfigStore) *Server {
+func NewServer(lb interfaces.Balancer, proxyHandler http.Handler, port int, log logger.Logger, rateLimiter *limiter.TokenBucket, store limiter.ConfigStore, rateLimitingEnabled bool) *Server {
 	router := mux.NewRouter()
 	s := &Server{
-		router:           router,
-		balancer:         lb,
-		proxyHandler:     proxyHandler,
-		port:             port,
-		logger:           log,
-		rateLimiter:      rateLimiter,
-		rateLimiterStore: store,
+		router:              router,
+		balancer:            lb,
+		proxyHandler:        proxyHandler,
+		port:                port,
+		logger:              log,
+		rateLimiter:         rateLimiter,
+		rateLimiterStore:    store,
+		rateLimitingEnabled: rateLimitingEnabled,
 	}
 	s.setupRoutes()
 	return s
@@ -45,20 +46,27 @@ func (s *Server) setupRoutes() {
 	adminRouter := s.router.PathPrefix("/admin").Subrouter()
 	adminRouter.HandleFunc("/backend-status", s.handleBackendStatus).Methods("POST")
 
-	apiRouter := s.router.PathPrefix("/api/v1").Subrouter()
-	apiRouter.Use(jsonMiddleware)
-	s.setupAPIRoutes(apiRouter)
+	// Регистрируем API маршруты только если rate limiting включен
+	if s.rateLimitingEnabled {
+		apiRouter := s.router.PathPrefix("/api/v1").Subrouter()
+		apiRouter.Use(jsonMiddleware)
+		s.setupAPIRoutes(apiRouter)
+		s.logger.Infof("API endpoints enabled")
+	} else {
+		// Блокируем доступ к API если rate limiting отключен
+		s.router.PathPrefix("/api/v1").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"error": "API endpoints disabled"})
+		})
+		s.logger.Infof("API endpoints disabled")
+	}
 
+	// Все остальные запросы идут в прокси
 	s.router.PathPrefix("/").Handler(s.proxyHandler)
 }
 
 func (s *Server) setupAPIRoutes(router *mux.Router) {
-	memStore := store.NewInMemoryStore(limiter.RateConfig{
-		Capacity:   100,
-		RefillRate: 10,
-	})
-
-	clientHandler := handler.NewClientHandler(memStore, s.logger)
+	clientHandler := handler.NewClientHandler(s.rateLimiterStore, s.logger)
 	clientHandler.RegisterRoutes(router)
 }
 

@@ -20,6 +20,9 @@ type Balancer interface {
 	Next(*http.Request) (*url.URL, error)
 	GetAll() []*core.Backend
 	MarkBackendStatus(url string, alive bool)
+}
+
+type HealthChecker interface {
 	StartHealthChecks(ctx context.Context, interval time.Duration)
 }
 

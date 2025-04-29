@@ -1,4 +1,3 @@
-// internal/balancer/health/checker.go
 package health
 
 import (
@@ -21,7 +20,6 @@ type Balancer interface {
 	MarkBackendStatus(url string, alive bool)
 }
 
-// Backend структура бэкенда (должна быть определена в balancer package)
 type Backend struct {
 	URL     string
 	IsAlive bool

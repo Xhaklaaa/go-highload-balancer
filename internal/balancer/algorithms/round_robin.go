@@ -26,10 +26,10 @@ func NewRoundRobin(backends []*core.Backend) *RoundRobin {
 
 type RoundRobinBalancer struct {
 	mu       sync.RWMutex
-	backends []*core.Backend
-	current  uint32
+	Backends []*core.Backend
+	Current  uint32
 	indexMap map[string]int
-	logger   logger.Logger
+	Logger   logger.Logger
 	client   *http.Client
 }
 
@@ -39,7 +39,7 @@ func NewRoundRobinBalancer(
 ) *RoundRobinBalancer {
 	rrb := &RoundRobinBalancer{
 		indexMap: make(map[string]int),
-		logger:   logger,
+		Logger:   logger,
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
@@ -57,7 +57,7 @@ func NewRoundRobinBalancer(
 			Healthy: true,
 		}
 
-		rrb.backends = append(rrb.backends, backend)
+		rrb.Backends = append(rrb.Backends, backend)
 		rrb.indexMap[u.String()] = i
 	}
 
@@ -68,25 +68,25 @@ func (b *RoundRobinBalancer) Next(r *http.Request) (*url.URL, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	if len(b.backends) == 0 {
-		b.logger.Warnf("No available backends")
+	if len(b.Backends) == 0 {
+		b.Logger.Warnf("No available backends")
 		return nil, core.ErrNoAvailableBackend
 	}
 
-	start := atomic.LoadUint32(&b.current)
+	start := atomic.LoadUint32(&b.Current)
 	next := start
 
-	for i := 0; i < len(b.backends); i++ {
-		next = (next + 1) % uint32(len(b.backends))
-		backend := b.backends[next]
+	for i := 0; i < len(b.Backends); i++ {
+		next = (next + 1) % uint32(len(b.Backends))
+		backend := b.Backends[next]
 
 		if backend.IsHealthy() {
-			atomic.StoreUint32(&b.current, next)
+			atomic.StoreUint32(&b.Current, next)
 			return backend.URL, nil
 		}
 	}
 
-	b.logger.Warnf("All backends are unavailable")
+	b.Logger.Warnf("All backends are unavailable")
 	return nil, core.ErrNoAvailableBackend
 }
 
@@ -95,8 +95,8 @@ func (b *RoundRobinBalancer) MarkBackendStatus(url string, alive bool) {
 	defer b.mu.Unlock()
 
 	if idx, exists := b.indexMap[url]; exists {
-		b.backends[idx].SetAlive(alive)
-		b.logger.Infof("Backend status changed: %s -> %v", url, alive)
+		b.Backends[idx].SetAlive(alive)
+		b.Logger.Infof("Backend status changed: %s -> %v", url, alive)
 	}
 }
 
@@ -109,7 +109,7 @@ func (b *RoundRobinBalancer) StartHealthChecks(ctx context.Context, interval tim
 		case <-ticker.C:
 			b.checkAllBackends()
 		case <-ctx.Done():
-			b.logger.Infof("Health checks stopped")
+			b.Logger.Infof("Health checks stopped")
 			return
 		}
 	}
@@ -118,7 +118,7 @@ func (b *RoundRobinBalancer) StartHealthChecks(ctx context.Context, interval tim
 func (b *RoundRobinBalancer) checkAllBackends() {
 	var wg sync.WaitGroup
 
-	for _, backend := range b.backends {
+	for _, backend := range b.Backends {
 		wg.Add(1)
 		go func(be *core.Backend) {
 			defer wg.Done()
@@ -147,4 +147,10 @@ func (b *RoundRobinBalancer) checkBackendHealth(backend *core.Backend) {
 	defer resp.Body.Close()
 
 	backend.SetHealthy(resp.StatusCode == http.StatusOK)
+}
+
+func (rr *RoundRobinBalancer) GetAll() []*core.Backend {
+	rr.mu.RLock()
+	defer rr.mu.RUnlock()
+	return rr.Backends
 }

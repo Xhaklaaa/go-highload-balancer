@@ -29,3 +29,7 @@ func (f *StrategyFactory) New(
 		return nil, core.ErrInvalidAlgorithm
 	}
 }
+
+func NewStrategyFactory(logger interfaces.Logger) *StrategyFactory {
+	return &StrategyFactory{Logger: logger}
+}

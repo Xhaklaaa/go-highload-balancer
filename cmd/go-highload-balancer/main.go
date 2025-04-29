@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"time"
+
+	_ "github.com/jackc/pgx/v4/stdlib"
 
 	"github.com/xhaklaaa/go-highload-balancer/internal/balancer"
 	"github.com/xhaklaaa/go-highload-balancer/internal/balancer/interfaces"
@@ -10,6 +14,7 @@ import (
 	"github.com/xhaklaaa/go-highload-balancer/internal/limiter"
 	"github.com/xhaklaaa/go-highload-balancer/internal/limiter/store"
 	"github.com/xhaklaaa/go-highload-balancer/internal/logger"
+	"github.com/xhaklaaa/go-highload-balancer/internal/migrations"
 	"github.com/xhaklaaa/go-highload-balancer/internal/proxy"
 	"github.com/xhaklaaa/go-highload-balancer/internal/server"
 )
@@ -17,28 +22,50 @@ import (
 func main() {
 	log := &logger.DefaultLogger{}
 
-	cfg, err := config.Load(config.GetConfigPath())
+	cfg, err := config.Load("/configs/config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
+	db, err := sql.Open("pgx", fmt.Sprintf(
+		"postgres://%s:%s@%s:%d/%s?sslmode=disable",
+		cfg.RateLimiting.Postgres.User,
+		cfg.RateLimiting.Postgres.Password,
+		cfg.RateLimiting.Postgres.Host,
+		cfg.RateLimiting.Postgres.Port,
+		cfg.RateLimiting.Postgres.DBName,
+	))
+	if err != nil {
+		log.Fatalf("Failed to connect to DB: %v", err)
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := migrations.Run(ctx, db); err != nil {
+		log.Fatalf("Migrations failed: %v", err)
+	}
+
 	// Инициализация балансировщика
-	factory := balancer.StrategyFactory(log)
+	factory := balancer.NewStrategyFactory(log)
 	lb, err := factory.New(
 		interfaces.AlgorithmType(cfg.Balancing.Algorithm),
 		cfg.Backends,
-		log,
 	)
 	if err != nil {
 		log.Fatalf("Failed to create balancer: %v", err)
 	}
 
-	ctx := context.Background()
-	go lb.StartHealthChecks(ctx, 30*time.Second)
+	if healthChecker, ok := lb.(interfaces.HealthChecker); ok {
+		ctx := context.Background()
+		go healthChecker.StartHealthChecks(ctx, 30*time.Second)
+	} else {
+		log.Warnf("Balancer does not support health checks")
+	}
 
 	// Инициализация прокси
 	proxyHandler := proxy.NewHandler(lb, log)
-
 	// Инициализация rate limiter
 	var rateStore limiter.ConfigStore
 	defaultRateConfig := limiter.RateConfig{
@@ -74,6 +101,7 @@ func main() {
 		log,
 		rateLimiter,
 		rateStore,
+		cfg.RateLimiting.Enabled,
 	)
 
 	if err := srv.Start(); err != nil {

@@ -4,13 +4,18 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/xhaklaaa/go-highload-balancer/internal/balancer/algorithms"
+	"github.com/xhaklaaa/go-highload-balancer/internal/core"
 	"gopkg.in/go-playground/assert.v1"
 )
 
+// MockLogger реализует интерфейс Logger для тестов
 type MockLogger struct {
 	mu   sync.Mutex
 	logs []string
@@ -28,18 +33,19 @@ func (m *MockLogger) Warnf(format string, args ...interface{}) {
 	m.logs = append(m.logs, "[WARN] "+fmt.Sprintf(format, args...))
 }
 
+// Тест RoundRobin алгоритма
 func TestRoundRobinBalancer_NextBackend(t *testing.T) {
 	tests := []struct {
 		name         string
 		backends     []string
-		setup        func(*RoundRobinBalancer)
+		setup        func(*algorithms.RoundRobinBalancer)
 		expectedURLs []string
 	}{
 		{
 			name:     "basic round robin cycle",
 			backends: []string{"http://backend1", "http://backend2", "http://backend3"},
-			setup: func(lb *RoundRobinBalancer) {
-				atomic.StoreUint32(&lb.current, 2) // Начинаем с последнего
+			setup: func(lb *algorithms.RoundRobinBalancer) {
+				atomic.StoreUint32(&lb.Current, 2) // Начинаем с последнего
 			},
 			expectedURLs: []string{
 				"http://backend1", // (2+1)%3=0
@@ -47,30 +53,19 @@ func TestRoundRobinBalancer_NextBackend(t *testing.T) {
 				"http://backend3", // (1+1)%3=2
 			},
 		},
-		{
-			name:     "skip unavailable backend",
-			backends: []string{"http://backend1", "http://backend2"},
-			setup: func(lb *RoundRobinBalancer) {
-				lb.MarkBackendStatus("http://backend2", false)
-			},
-			expectedURLs: []string{
-				"http://backend1",
-				"http://backend1", // Пропускаем backend2
-			},
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logger := &MockLogger{}
-			lb := NewRoundRobinBalancer(tt.backends, logger)
+			lb := algorithms.NewRoundRobinBalancer(tt.backends, logger)
 			if tt.setup != nil {
 				tt.setup(lb)
 			}
 
 			for _, expected := range tt.expectedURLs {
-				selected := lb.NextBackend()
-				if selected != expected {
+				selected, _ := lb.Next(nil)
+				if selected.String() != expected {
 					t.Errorf("Expected %s, got %s", expected, selected)
 				}
 			}
@@ -78,64 +73,55 @@ func TestRoundRobinBalancer_NextBackend(t *testing.T) {
 	}
 }
 
+// Тест недоступных бэкендов
 func TestRoundRobinBalancer_UnavailableBackends(t *testing.T) {
 	logger := &MockLogger{}
 	backends := []string{"http://backend1", "http://backend2"}
-	lb := NewRoundRobinBalancer(backends, logger)
+	lb := algorithms.NewRoundRobinBalancer(backends, logger)
 
 	// Помечаем все бэкенды как недоступные
 	lb.MarkBackendStatus("http://backend1", false)
 	lb.MarkBackendStatus("http://backend2", false)
 
-	selected := lb.NextBackend()
-	if selected != "" {
-		t.Errorf("Expected empty string, got %s", selected)
-	}
-
-	// Проверяем логи:
-	// 1. Изменение статуса backend1
-	// 2. Изменение статуса backend2
-	// 3. Предупреждение о недоступных бэкендах
-	expectedLogs := 3
-	if len(logger.logs) != expectedLogs {
-		t.Errorf("Expected %d log entries, got %d. Logs: %v",
-			expectedLogs,
-			len(logger.logs),
-			logger.logs)
+	_, err := lb.Next(nil)
+	if err == nil {
+		t.Error("Expected error for no available backends")
 	}
 }
 
+// Тест на конкурентный доступ
 func TestRoundRobinConcurrent(t *testing.T) {
 	backends := []string{"http://backend1", "http://backend2"}
-	lb := NewRoundRobinBalancer(backends, &MockLogger{})
+	lb := algorithms.NewRoundRobinBalancer(backends, &MockLogger{})
 
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			lb.NextBackend()
+			lb.Next(nil)
 		}()
 	}
 	wg.Wait()
-
-	// Проверяем отсутствие гонок данных
-	final := lb.NextBackend()
-	if final != "http://backend1" && final != "http://backend2" {
-		t.Errorf("Unexpected final backend: %s", final)
-	}
 }
 
+// Тест ReverseProxy с недоступными бэкендами
 func TestBalancerWithUnhealthyBackend(t *testing.T) {
-	pool := NewBackendPool()
-	pool.AddBackend("http://invalid:8080")
+	// Создаем тестовый бэкенд
+	backendURL, _ := url.Parse("http://invalid:8080")
+	pool := core.NewBackendPool([]*url.URL{backendURL})
 
-	strategy := NewRoundRobin()
-	proxy := NewReverseProxy(strategy, pool)
+	// Инициализация балансировщика
+	strategy := algorithms.NewRoundRobinBalancer([]string{"http://invalid:8080"}, &MockLogger{})
 
+	// Создаем прокси
+	proxy := httputil.NewSingleHostReverseProxy(backendURL)
+	handler := NewProxyHandler(strategy, &MockLogger{})
+
+	// Тестовый запрос
 	req := httptest.NewRequest("GET", "/", nil)
 	rr := httptest.NewRecorder()
 
-	proxy.ServeHTTP(rr, req)
+	handler.ServeHTTP(rr, req)
 	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }

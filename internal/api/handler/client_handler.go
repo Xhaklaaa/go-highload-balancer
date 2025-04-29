@@ -68,11 +68,11 @@ func (h *ClientHandler) createClient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.UpsertConfig(r.Context(), req.ID, config); err != nil {
-		h.logger.Errorf("Failed to create client: %v", err)
+		h.logger.Errorf("DB ERROR: %v", err)
 		h.respondError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-
+	h.logger.Infof("Client created: %s", req.ID)
 	h.respondJSON(w, http.StatusCreated, ClientResponse{
 		ID:       req.ID,
 		Capacity: config.Capacity,
